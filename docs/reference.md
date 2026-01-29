@@ -25,11 +25,11 @@ This document is the **single source of truth** for building the Project Manager
 
 ### Color Scheme
 
-* Background: **Pure Black (#000000)**
-* Surface / Cards: **Near Black (#0a0a0a – #111111)**
-* Text: **White (#ffffff)**
-* Muted Text: **Gray (#a1a1aa)**
-* Border: **Neutral dark gray (#1f2937)**
+* Background: **Pure Black (#1a1a1a)**
+* Surface / Cards: **Near Black (#1E1F23)**
+* Text: **whitish (#C3C9CD)**
+* Muted Text: **Gray (#808080)**
+* Border: **Neutral dark gray (#C3C9CD)/10 opacity**
 
 ### Primary Brand Color
 

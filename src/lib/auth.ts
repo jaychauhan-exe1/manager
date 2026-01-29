@@ -1,10 +1,8 @@
 import { betterAuth } from "better-auth";
-import { Pool } from "pg";
+import { db } from "./db";
 
 export const auth = betterAuth({
-  database: new Pool({
-    connectionString: process.env.BETTER_AUTH_DATABASE_URL,
-  }),
+  database: db.pool,
   emailAndPassword: {
     enabled: true,
   },
