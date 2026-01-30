@@ -73,9 +73,13 @@ export default function ProjectPage() {
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
   const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [editingSubtaskId, setEditingSubtaskId] = useState<string | null>(null);
+  const [expandedSubtaskId, setExpandedSubtaskId] = useState<string | null>(null);
 
   useEffect(() => {
     setIsEditingTitle(false);
+    setEditingSubtaskId(null);
+    setExpandedSubtaskId(null);
   }, [selectedTaskId]);
 
   const fetchData = useCallback(async () => {
@@ -295,6 +299,10 @@ export default function ProjectPage() {
       const result = await deleteTask(taskId);
       if (result.success) {
         toast.success("Task deleted");
+        if (selectedTaskId === taskId) {
+          setIsSidebarOpen(false);
+          setSelectedTaskId(null);
+        }
         fetchData();
       } else {
         toast.error("Failed to delete task");
@@ -665,9 +673,11 @@ export default function ProjectPage() {
                       <Select defaultValue={selectedTask.assignee_id || 'none'} onValueChange={(v) => handleAssignTask(selectedTask.id, v)}>
                         <SelectTrigger className="h-12 bg-muted/20 border-border/30 rounded-xl px-4">
                           <div className="flex items-center gap-3">
-                            <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center text-[10px] font-bold text-primary shrink-0">
-                              {selectedTask.assignee_name?.[0] || '?'}
-                            </div>
+                            {selectedTask.assignee_id && selectedTask.assignee_id !== 'none' && (
+                              <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center text-[10px] font-bold text-primary shrink-0">
+                                {selectedTask.assignee_name?.[0] || '?'}
+                              </div>
+                            )}
                             <div className="text-sm font-bold truncate">
                               <SelectValue placeholder="Unassigned" />
                             </div>
@@ -721,69 +731,124 @@ export default function ProjectPage() {
                     />
                   </div>
 
-                  <div className="space-y-3">
+                  <div className="space-y-4">
                     {selectedTaskSubtasks.map(st => (
-                      <div key={st.id} className="group flex items-center justify-between p-4 rounded-2xl border border-border/30 bg-card/30 hover:bg-primary/5 hover:border-primary/30 transition-all duration-300">
-                        <div className="flex items-center gap-4 flex-1">
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleStatusChange(st.id, st.status === 'Done' ? 'To Do' : 'Done');
-                            }}
-                            className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all duration-300 ${
-                              st.status === 'Done' ? 'bg-green-500 border-green-500 text-white scale-110 shadow-lg shadow-green-500/20' : 'border-muted-foreground/20 hover:border-primary/50'
-                            }`}
-                          >
-                            {st.status === 'Done' && <CheckCircle2 className="w-3.5 h-3.5" />}
-                          </button>
-                          <div className="flex flex-col flex-1">
-                            <Input 
-                              defaultValue={st.title}
-                              onBlur={(e) => handleTaskUpdate(st.id, { title: e.target.value })}
-                              className={`text-sm font-bold bg-transparent border-none p-0 h-auto focus-visible:ring-0 focus-visible:bg-white/5 transition-all ${st.status === 'Done' ? 'line-through text-muted-foreground/50' : 'text-foreground'}`}
-                            />
-                            <div className="flex items-center gap-3 mt-1">
-                               <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded bg-muted/50 text-muted-foreground uppercase`}>
-                                 {st.status}
-                               </span>
-                               {st.deadline && (
-                                 <span className="text-[9px] text-destructive/80 font-bold flex items-center gap-1">
-                                   <Clock className="w-3 h-3" /> {new Date(st.deadline).toLocaleDateString()}
+                      <div key={st.id} className="group flex flex-col p-4 rounded-2xl border border-border/30 bg-card/30 hover:bg-primary/5 hover:border-primary/30 transition-all duration-300 cursor-pointer" onClick={() => setExpandedSubtaskId(expandedSubtaskId === st.id ? null : st.id)}>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-4 flex-1">
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleStatusChange(st.id, st.status === 'Done' ? 'To Do' : 'Done');
+                              }}
+                              className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all duration-300 ${
+                                st.status === 'Done' ? 'bg-green-500 border-green-500 text-white scale-110 shadow-lg shadow-green-500/20' : 'border-muted-foreground/20 hover:border-primary/50'
+                              }`}
+                            >
+                              {st.status === 'Done' && <CheckCircle2 className="w-3.5 h-3.5" />}
+                            </button>
+                            <div className="flex flex-col flex-1">
+                              {editingSubtaskId === st.id ? (
+                                <Input 
+                                  autoFocus
+                                  defaultValue={st.title}
+                                  onClick={(e) => e.stopPropagation()}
+                                  onBlur={(e) => {
+                                    handleTaskUpdate(st.id, { title: e.target.value });
+                                    setEditingSubtaskId(null);
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      handleTaskUpdate(st.id, { title: e.currentTarget.value });
+                                      setEditingSubtaskId(null);
+                                    }
+                                  }}
+                                  className={`text-sm font-bold bg-muted/20 border-border/50 px-2 h-8 rounded-lg focus-visible:ring-1`}
+                                />
+                              ) : (
+                                <div className="flex items-center gap-2 group/title">
+                                  <div className={`text-sm font-bold transition-all ${st.status === 'Done' ? 'line-through text-muted-foreground/50' : 'text-foreground'}`}>
+                                    {st.title}
+                                  </div>
+                                  <Button 
+                                    variant="ghost" 
+                                    size="icon" 
+                                    className="h-6 w-6 rounded-full opacity-0 group-hover/title:opacity-100 transition-all hover:bg-primary/20 hover:text-primary"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setEditingSubtaskId(st.id);
+                                    }}
+                                  >
+                                    <Pencil className="w-3 h-3" />
+                                  </Button>
+                                </div>
+                              )}
+                              
+                              <div className="flex items-center gap-3 mt-1.5">
+                                 <span className={`text-[8px] font-black tracking-widest px-1.5 py-0.5 rounded bg-muted/50 text-muted-foreground uppercase border border-border/50`}>
+                                   {st.status}
                                  </span>
-                               )}
-                               <TimerDisplay task={st} onAction={(a: 'start' | 'stop' | 'break') => handleTimerAction(st.id, a)} />
+                                 <span className={`text-[8px] font-black tracking-widest px-1.5 py-0.5 rounded bg-primary/5 text-primary uppercase border border-primary/20`}>
+                                   {st.priority}
+                                 </span>
+                                 {st.deadline && (
+                                   <span className="text-[9px] text-destructive/80 font-bold flex items-center gap-1">
+                                     <Clock className="w-3 h-3" /> {new Date(st.deadline).toLocaleDateString()}
+                                   </span>
+                                 )}
+                                 <div onClick={(e) => e.stopPropagation()}>
+                                   <TimerDisplay task={st} onAction={(a: 'start' | 'stop' | 'break') => handleTimerAction(st.id, a)} />
+                                 </div>
+                              </div>
                             </div>
                           </div>
+
+                          <div onClick={(e) => e.stopPropagation()}>
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full opacity-0 group-hover:opacity-100 transition-all">
+                                  <MoreVertical className="h-4 h-4" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end" className="w-48">
+                                <DropdownMenuLabel>Change Status</DropdownMenuLabel>
+                                 {STATUS_COLUMNS.map(s => (
+                                  <DropdownMenuItem 
+                                    key={s} 
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleStatusChange(st.id, s);
+                                    }} 
+                                    className="gap-2"
+                                  >
+                                    <div className={`w-2 h-2 rounded-full ${
+                                      s === 'Done' ? 'bg-green-500' : s === 'In Progress' ? 'bg-blue-500' : s === 'Break' ? 'bg-orange-500' : s === 'Blocked' ? 'bg-destructive' : 'bg-muted-foreground/30'
+                                    }`} />
+                                    {s}
+                                  </DropdownMenuItem>
+                                ))}
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem className="text-destructive gap-2" onClick={() => handleDeleteTask(st.id)}>
+                                  <AlertCircle className="w-4 h-4" /> Delete Subtask
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </div>
                         </div>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full opacity-0 group-hover:opacity-100 transition-all">
-                              <MoreVertical className="h-4 h-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" className="w-48">
-                            <DropdownMenuLabel>Change Status</DropdownMenuLabel>
-                             {STATUS_COLUMNS.map(s => (
-                              <DropdownMenuItem 
-                                key={s} 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleStatusChange(st.id, s);
-                                }} 
-                                className="gap-2"
-                              >
-                                <div className={`w-2 h-2 rounded-full ${
-                                  s === 'Done' ? 'bg-green-500' : s === 'In Progress' ? 'bg-blue-500' : s === 'Break' ? 'bg-orange-500' : s === 'Blocked' ? 'bg-destructive' : 'bg-muted-foreground/30'
-                                }`} />
-                                {s}
-                              </DropdownMenuItem>
-                            ))}
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem className="text-destructive gap-2" onClick={() => handleDeleteTask(st.id)}>
-                              <AlertCircle className="w-4 h-4" /> Delete Subtask
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+
+                        {expandedSubtaskId === st.id && (
+                          <div className="mt-4 pt-4 border-t border-border/10 animate-in fade-in slide-in-from-top-1 duration-200" onClick={(e) => e.stopPropagation()}>
+                            <Label className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest mb-2 block">
+                              Task Description
+                            </Label>
+                            <Textarea 
+                              defaultValue={st.description}
+                              onBlur={(e) => handleTaskUpdate(st.id, { description: e.target.value })}
+                              placeholder="What exactly needs to be done?"
+                              className="text-xs leading-relaxed bg-muted/20 border-none p-3 rounded-xl resize-none focus-visible:ring-1 focus-visible:ring-primary/20 min-h-[60px]"
+                            />
+                          </div>
+                        )}
                       </div>
                     ))}
                     {selectedTaskSubtasks.length === 0 && (
@@ -822,9 +887,32 @@ export default function ProjectPage() {
               <div className="p-8 border-t border-border/10">
                 <div className="flex items-center gap-3">
                   <Button variant="outline" className="flex-1 h-12 rounded-xl font-bold" onClick={() => setIsSidebarOpen(false)}>Close</Button>
-                  <Button variant="destructive" className="h-12 w-12 rounded-xl p-0">
-                    <MoreVertical className="w-5 h-5 rotate-90" />
-                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="destructive" className="h-12 w-12 rounded-xl p-0">
+                        <MoreVertical className="w-5 h-5 rotate-90" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-56 p-2 rounded-2xl shadow-2xl border-border/50 bg-card/95 backdrop-blur-xl">
+                      <DropdownMenuLabel className="text-[10px] font-black uppercase tracking-widest text-muted-foreground/60 mb-1">Big Task Actions</DropdownMenuLabel>
+                      <DropdownMenuItem 
+                        className="rounded-xl h-10 font-bold gap-3"
+                        onClick={() => {
+                          navigator.clipboard.writeText(selectedTask.id);
+                          toast.success("Task ID copied to clipboard");
+                        }}
+                      >
+                         <List className="w-4 h-4 text-primary" /> Copy Task ID
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator className="my-2 bg-border/20" />
+                      <DropdownMenuItem 
+                        className="rounded-xl h-10 font-bold gap-3 text-destructive focus:bg-destructive/10 focus:text-destructive"
+                        onClick={() => handleDeleteTask(selectedTask.id)}
+                      >
+                        <AlertCircle className="w-4 h-4" /> Delete Big Task
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
               </div>
             </>
