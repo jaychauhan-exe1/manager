@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { authClient } from "@/src/lib/auth-client";
 import { useParams, useRouter } from "next/navigation";
-import { getProjectById, getTasks, updateTaskStatus, getProjectMembers, updateTaskPosition, initDatabase } from "@/app/actions/projects";
+import { getProjectById, getTasks, updateTaskStatus, getProjectMembers, updateTaskPosition, initDatabase, deleteTask, startTaskTimer, stopTaskTimer } from "@/app/actions/projects";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -221,6 +221,30 @@ export default function ProjectPage() {
     }
   };
 
+  const handleDeleteTask = async (taskId: string) => {
+    if (confirm("Are you sure you want to delete this task?")) {
+      const result = await deleteTask(taskId);
+      if (result.success) {
+        toast.success("Task deleted");
+        fetchData();
+      } else {
+        toast.error("Failed to delete task");
+      }
+    }
+  };
+
+  const handleTimerAction = async (taskId: string, action: 'start' | 'stop' | 'break') => {
+    if (action === 'stop' || action === 'break') {
+      await stopTaskTimer(taskId);
+      if (action === 'break') {
+        await startTaskTimer(taskId, 'break');
+      }
+    } else {
+      await startTaskTimer(taskId, 'working');
+    }
+    fetchData();
+  };
+
   if (loading || authPending) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
@@ -358,6 +382,7 @@ export default function ProjectPage() {
                           setSelectedTaskId(task.id);
                           setIsDetailsOpen(true);
                         }}
+                        onDelete={() => handleDeleteTask(task.id)}
                         onStatusChange={handleStatusChange}
                         isDragging={draggingTaskId === task.id}
                       />
@@ -369,81 +394,96 @@ export default function ProjectPage() {
           </TabsContent>
 
           <TabsContent value="list" className="mt-0 outline-none">
-            <Card className="border-border shadow-2xl bg-card/30 backdrop-blur-sm">
-              <div className="p-0 overflow-hidden">
-                <table className="w-full text-left text-sm border-collapse">
-                  <thead className="bg-muted/30 text-muted-foreground uppercase text-[10px] font-bold tracking-wider">
-                    <tr>
-                      <th className="px-6 py-4">Title</th>
-                      <th className="px-6 py-4">Status</th>
-                      <th className="px-6 py-4">Type</th>
-                      <th className="px-6 py-4">Priority</th>
-                      <th className="px-6 py-4">Assignee</th>
-                      <th className="px-6 py-4 text-right">Created</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border/50 text-foreground">
-                    {tasks.map((task) => (
-                      <tr key={task.id} className="hover:bg-primary/5 transition-colors cursor-pointer group" onClick={() => {
-                        if (task.type === 'big') {
-                          setSelectedTaskId(task.id);
-                          setIsSidebarOpen(true);
-                        } else if (task.parent_id) {
-                          setSelectedTaskId(task.parent_id);
-                          setIsSidebarOpen(true);
-                        }
-                      }}>
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-2">
-                            {task.type === 'big' ? (
-                              <ChevronRight className="w-4 h-4 text-primary" />
-                            ) : (
-                              <div className="w-4 ml-4" />
-                            )}
-                            <span className={task.type === 'big' ? "font-bold" : "text-muted-foreground"}>{task.title}</span>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                            task.status === 'Done' ? 'bg-green-500/10 text-green-500' :
-                            task.status === 'In Progress' ? 'bg-primary/10 text-primary' : 
-                            task.status === 'Blocked' ? 'bg-destructive/10 text-destructive' : 'bg-muted text-muted-foreground'
-                          }`}>
-                            {task.status}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4">
-                           <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase ${
-                              task.type === 'big' ? 'bg-purple-500/10 text-purple-500' : 'bg-muted text-muted-foreground'
-                           }`}>
-                             {task.type}
-                           </span>
-                        </td>
-                        <td className="px-6 py-4">
-                           <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase ${
-                              task.priority === 'High' || task.priority === 'Urgent' ? 'bg-destructive/10 text-destructive' :
-                              task.priority === 'Medium' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
-                            }`}>
-                              {task.priority}
-                            </span>
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-2">
-                            <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center text-[10px] font-bold border border-primary/30">
-                              {task.assignee_name?.[0] || '?'}
-                            </div>
-                            <span>{task.assignee_name || 'Unassigned'}</span>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 text-right text-muted-foreground text-xs">
-                          {new Date(task.created_at).toLocaleDateString()}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
+            <div className="space-y-6">
+              {bigTasks.map(bt => (
+                <Card key={bt.id} className="border-border shadow-md bg-card/20 overflow-hidden">
+                  <div className="p-4 bg-muted/30 border-b border-border flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-3 h-3 rounded-full ${bt.status === 'Done' ? 'bg-green-500' : 'bg-primary'}`} />
+                      <h4 className="font-bold text-sm tracking-tight">{bt.title}</h4>
+                      <span className="text-[10px] text-muted-foreground uppercase">{bt.status}</span>
+                    </div>
+                    {bt.deadline && (
+                      <div className="text-[10px] text-muted-foreground flex items-center gap-1">
+                        <Calendar className="w-3 h-3" />
+                        {new Date(bt.deadline).toLocaleDateString()}
+                      </div>
+                    )}
+                  </div>
+                  <div className="overflow-hidden">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead className="bg-muted/10 text-muted-foreground uppercase text-[9px] font-bold tracking-wider">
+                        <tr>
+                          <th className="px-6 py-3">Subtask</th>
+                          <th className="px-6 py-3">Status</th>
+                          <th className="px-6 py-3">Priority</th>
+                          <th className="px-6 py-3">Time</th>
+                          <th className="px-6 py-3">Deadline</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border/30">
+                        {tasks.filter(st => st.parent_id === bt.id).map(st => (
+                          <tr key={st.id} className="hover:bg-primary/5 transition-colors cursor-pointer" onClick={() => {
+                            setSelectedTaskId(bt.id);
+                            setIsSidebarOpen(true);
+                          }}>
+                            <td className="px-6 py-3 font-medium">{st.title}</td>
+                            <td className="px-6 py-3">
+                              <span className={`px-2 py-0.5 rounded-full text-[9px] font-black ${
+                                st.status === 'Done' ? 'bg-green-500/10 text-green-500' : 'bg-primary/10 text-primary'
+                              }`}>{st.status}</span>
+                            </td>
+                            <td className="px-6 py-3">{st.priority}</td>
+                            <td className="px-6 py-3 text-muted-foreground font-mono">
+                              {Math.floor(st.total_time_spent / 3600)}h {Math.floor((st.total_time_spent % 3600) / 60)}m
+                            </td>
+                            <td className="px-6 py-3 text-muted-foreground">
+                              {st.deadline ? new Date(st.deadline).toLocaleDateString() : '-'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
+              ))}
+              {tasks.filter(t => t.type === 'small' && !t.parent_id).length > 0 && (
+                <div className="pt-8">
+                  <h3 className="text-xs font-black uppercase tracking-widest text-muted-foreground mb-4">Uncategorized Tasks</h3>
+                   <Card className="border-border shadow-md bg-card/20 overflow-hidden">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead className="bg-muted/10 text-muted-foreground uppercase text-[9px] font-bold tracking-wider">
+                        <tr>
+                          <th className="px-6 py-3">Task</th>
+                          <th className="px-6 py-3">Status</th>
+                          <th className="px-6 py-3">Priority</th>
+                          <th className="px-6 py-3">Deadline</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border/30">
+                        {tasks.filter(t => t.type === 'small' && !t.parent_id).map(st => (
+                          <tr key={st.id} className="hover:bg-primary/5 transition-colors cursor-pointer" onClick={() => {
+                            setSelectedTaskId(st.id);
+                            setIsDetailsOpen(true);
+                          }}>
+                            <td className="px-6 py-3 font-medium">{st.title}</td>
+                            <td className="px-6 py-3">
+                              <span className={`px-2 py-0.5 rounded-full text-[9px] font-black ${
+                                st.status === 'Done' ? 'bg-green-500/10 text-green-500' : 'bg-primary/10 text-primary'
+                              }`}>{st.status}</span>
+                            </td>
+                            <td className="px-6 py-3">{st.priority}</td>
+                            <td className="px-6 py-3 text-muted-foreground">
+                              {st.deadline ? new Date(st.deadline).toLocaleDateString() : '-'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </Card>
+                </div>
+              )}
+            </div>
           </TabsContent>
 
           <TabsContent value="members" className="mt-0 outline-none">
@@ -508,7 +548,7 @@ export default function ProjectPage() {
                   <div className="space-y-3">
                     {selectedTaskSubtasks.map(st => (
                       <div key={st.id} className="group flex items-center justify-between p-4 rounded-2xl border border-border/30 bg-card/30 hover:bg-primary/5 hover:border-primary/30 transition-all duration-300">
-                        <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-4 flex-1">
                           <button 
                             onClick={(e) => {
                               e.stopPropagation();
@@ -527,11 +567,16 @@ export default function ProjectPage() {
                             <div className={`text-sm font-bold transition-all ${st.status === 'Done' ? 'line-through text-muted-foreground/50' : 'text-foreground hover:text-primary'}`}>
                               {st.title}
                             </div>
-                            <div className="flex items-center gap-2 mt-1">
+                            <div className="flex items-center gap-3 mt-1">
                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded bg-muted/50 text-muted-foreground uppercase`}>
                                  {st.status}
                                </span>
-                               <span className="text-[9px] text-muted-foreground/50">• {st.priority}</span>
+                               {st.deadline && (
+                                 <span className="text-[9px] text-destructive/80 font-bold flex items-center gap-1">
+                                   <Clock className="w-3 h-3" /> {new Date(st.deadline).toLocaleDateString()}
+                                 </span>
+                               )}
+                               <TimerDisplay task={st} onAction={(a: 'start' | 'stop' | 'break') => handleTimerAction(st.id, a)} />
                             </div>
                           </div>
                         </div>
@@ -559,7 +604,7 @@ export default function ProjectPage() {
                               </DropdownMenuItem>
                             ))}
                             <DropdownMenuSeparator />
-                            <DropdownMenuItem className="text-destructive gap-2">
+                            <DropdownMenuItem className="text-destructive gap-2" onClick={() => handleDeleteTask(st.id)}>
                               <AlertCircle className="w-4 h-4" /> Delete Subtask
                             </DropdownMenuItem>
                           </DropdownMenuContent>
@@ -629,14 +674,14 @@ export default function ProjectPage() {
   );
 }
 
-function TaskItem({ task, subtasks, onDragStart, onDragEnd, onDrop, onClick, onOpenDetails, onStatusChange, isDragging }: any) {
+function TaskItem({ task, subtasks, onDragStart, onDragEnd, onDrop, onStatusChange, onDelete, onClick, onOpenDetails, isDragging }: any) {
   const progress = task.subtask_count > 0 ? (task.subtasks_done / task.subtask_count) * 100 : 0;
 
   return (
     <Card 
       className={`group hover:border-primary/50 transition-all duration-300 cursor-grab active:cursor-grabbing border-border shadow-md overflow-hidden ${
         isDragging ? 'border-primary border-dashed scale-[1.02] shadow-2xl relative z-50' : 'hover:shadow-2xl hover:shadow-primary/5'
-      } border-l-4 border-l-primary bg-card/60 backdrop-blur-sm relative`}
+      } border-l-4 ${task.status === 'Done' ? 'border-l-green-500 bg-green-500/5 opacity-80' : 'border-l-primary bg-card/60'} backdrop-blur-sm relative`}
       draggable
       onDragStart={(e) => onDragStart(e, task.id)}
       onDragEnd={onDragEnd}
@@ -750,5 +795,41 @@ function TaskItem({ task, subtasks, onDragStart, onDragEnd, onDrop, onClick, onO
         </div>
       </CardContent>
     </Card>
+  );
+}
+function TimerDisplay({ task, onAction }: { task: any, onAction: (action: 'start' | 'stop' | 'break') => void }) {
+  const [seconds, setSeconds] = useState(0);
+  
+  useEffect(() => {
+    let interval: any;
+    if (task.timer_status === 'working' || task.timer_status === 'break') {
+      const start = new Date(task.timer_started_at).getTime();
+      interval = setInterval(() => {
+        const now = new Date().getTime();
+        setSeconds(Math.floor((now - start) / 1000) + (task.total_time_spent || 0));
+      }, 1000);
+    } else {
+      setSeconds(task.total_time_spent || 0);
+    }
+    return () => clearInterval(interval);
+  }, [task]);
+
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+
+  return (
+    <div className="flex items-center gap-2 bg-muted/50 px-2 py-0.5 rounded-full border border-border/50">
+      <span className="text-[9px] font-mono text-primary tabular-nums">
+        {h > 0 && `${h}:`}{m.toString().padStart(2, '0')}:{s.toString().padStart(2, '0')}
+      </span>
+      <div className="flex gap-1">
+        {task.timer_status === 'idle' ? (
+          <button onClick={() => onAction('start')} className="text-primary hover:scale-110 transition-transform"><Plus className="w-2.5 h-2.5 rotate-45" /></button>
+        ) : (
+          <button onClick={() => onAction('stop')} className="text-destructive hover:scale-110 transition-transform"><AlertCircle className="w-2.5 h-2.5" /></button>
+        )}
+      </div>
+    </div>
   );
 }

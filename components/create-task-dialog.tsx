@@ -45,6 +45,7 @@ export function CreateTaskDialog({
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState("Medium");
+  const [deadline, setDeadline] = useState("");
   const [type, setType] = useState<"big" | "small">(fixedType || "small");
   
   // Default parent to the first big task if only one is provided (sidebar case)
@@ -72,6 +73,7 @@ export function CreateTaskDialog({
       type,
       parent_id: type === 'small' && parentId !== 'none' ? parentId : null,
       creator_id: userId,
+      deadline: deadline || null,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       subtask_count: 0,
@@ -93,7 +95,8 @@ export function CreateTaskDialog({
       priority,
       creator_id: userId,
       type: type,
-      parent_id: type === 'small' && parentId !== 'none' ? parentId : undefined
+      parent_id: type === 'small' && parentId !== 'none' ? parentId : undefined,
+      deadline: deadline || undefined
     });
     
     setLoading(false);
@@ -103,6 +106,7 @@ export function CreateTaskDialog({
       setTitle("");
       setDescription("");
       setPriority("Medium");
+      setDeadline("");
       onTaskCreated();
     } else {
       toast.error("Failed to create task");
@@ -193,6 +197,16 @@ export function CreateTaskDialog({
                   <SelectItem value="Urgent">Urgent</SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="deadline">Deadline (Optional)</Label>
+              <Input
+                id="deadline"
+                type="date"
+                value={deadline}
+                onChange={(e) => setDeadline(e.target.value)}
+                className="bg-muted/30 border-none focus-visible:ring-1"
+              />
             </div>
           </div>
           <DialogFooter>

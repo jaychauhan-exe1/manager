@@ -177,6 +177,16 @@ export function TaskDetailsDialog({
                 </div>
               </div>
 
+              <div className="grid gap-2">
+                <Label className="text-muted-foreground">Deadline</Label>
+                <Input 
+                  type="date" 
+                  defaultValue={task.deadline ? new Date(task.deadline).toISOString().split('T')[0] : ''}
+                  onChange={(e) => handleUpdate('deadline', e.target.value)}
+                  className="bg-muted/30 border-none focus-visible:ring-1"
+                />
+              </div>
+
               <div className="space-y-4 pt-4 border-t border-border/50">
                 <div className="flex items-center justify-between">
                   <Label className="text-sm font-bold flex items-center gap-2">

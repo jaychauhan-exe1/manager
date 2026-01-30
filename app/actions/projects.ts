@@ -57,14 +57,17 @@ export async function initDatabase() {
     const migrations = [
       "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS parent_id UUID REFERENCES tasks(id) ON DELETE CASCADE",
       "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'small'",
-      "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS position DOUBLE PRECISION DEFAULT 0"
+      "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS position DOUBLE PRECISION DEFAULT 0",
+      "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS deadline TIMESTAMPTZ",
+      "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS total_time_spent INTEGER DEFAULT 0",
+      "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS timer_started_at TIMESTAMPTZ",
+      "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS timer_status TEXT DEFAULT 'idle'"
     ];
 
     for (const m of migrations) {
       try {
         await db.query(m);
       } catch (e) {
-        // IF NOT EXISTS is supported in PG 9.6+, but just in case
         console.log(`Migration notice: ${m} - possibly already applied`);
       }
     }
@@ -72,9 +75,12 @@ export async function initDatabase() {
     // Ensure CHECK constraint for type
     try {
       await db.query(`ALTER TABLE tasks ADD CONSTRAINT tasks_type_check CHECK (type IN ('big', 'small'))`);
-    } catch (e) {
-      // Constraint probably exists
-    }
+    } catch (e) { }
+
+    // Ensure CHECK constraint for timer_status
+    try {
+      await db.query(`ALTER TABLE tasks ADD CONSTRAINT tasks_timer_status_check CHECK (timer_status IN ('idle', 'working', 'break'))`);
+    } catch (e) { }
 
     // Task Dependencies (Blocked by / Blocking)
     await db.query(`
@@ -103,6 +109,66 @@ export async function initDatabase() {
     return { success: true };
   } catch (error) {
     console.error("Database initialization error:", error);
+    return { success: false, error };
+  }
+}
+
+export async function deleteTask(taskId: string) {
+  try {
+    const taskResult = await db.query('SELECT parent_id FROM tasks WHERE id = $1', [taskId]);
+    const parentId = taskResult.rows[0]?.parent_id;
+
+    await db.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+
+    if (parentId) {
+      await syncParentTaskStatus(parentId);
+    }
+
+    return { success: true };
+  } catch (error) {
+    return { success: false, error };
+  }
+}
+
+export async function startTaskTimer(taskId: string, status: 'working' | 'break') {
+  try {
+    await db.query(`
+      UPDATE tasks 
+      SET timer_started_at = CURRENT_TIMESTAMP, timer_status = $1 
+      WHERE id = $2
+    `, [status, taskId]);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error };
+  }
+}
+
+export async function stopTaskTimer(taskId: string) {
+  try {
+    const task = await db.query('SELECT timer_started_at, total_time_spent, timer_status FROM tasks WHERE id = $1', [taskId]);
+    const { timer_started_at, total_time_spent, timer_status } = task.rows[0];
+
+    if (!timer_started_at) return { success: true };
+
+    const now = new Date();
+    const started = new Date(timer_started_at);
+    const diffSeconds = Math.floor((now.getTime() - started.getTime()) / 1000);
+    
+    // Only add to total if they were working, not on break? 
+    // Usually timer counts working time.
+    let newTotal = total_time_spent;
+    if (timer_status === 'working') {
+      newTotal += diffSeconds;
+    }
+
+    await db.query(`
+      UPDATE tasks 
+      SET timer_started_at = NULL, timer_status = 'idle', total_time_spent = $1 
+      WHERE id = $2
+    `, [newTotal, taskId]);
+
+    return { success: true };
+  } catch (error) {
     return { success: false, error };
   }
 }
@@ -199,6 +265,7 @@ export async function createTask(data: {
   creator_id: string;
   type?: 'big' | 'small';
   parent_id?: string;
+  deadline?: string;
 }) {
   try {
     const priority = data.priority || 'Medium';
@@ -216,8 +283,8 @@ export async function createTask(data: {
       : baseWeight;
 
     const result = await db.query(`
-      INSERT INTO tasks (project_id, title, description, status, priority, creator_id, type, parent_id, position)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      INSERT INTO tasks (project_id, title, description, status, priority, creator_id, type, parent_id, position, deadline)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       RETURNING *
     `, [
       data.project_id, 
@@ -228,7 +295,8 @@ export async function createTask(data: {
       data.creator_id,
       data.type || 'small',
       data.parent_id || null,
-      initialPosition
+      initialPosition,
+      data.deadline || null
     ]);
 
     if (data.parent_id) {
@@ -267,6 +335,7 @@ export async function updateTask(taskId: string, data: Partial<{
   status: string;
   priority: string;
   assignee_id: string;
+  deadline: string;
 }>) {
   try {
     const sets: string[] = [];
