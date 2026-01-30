@@ -127,12 +127,19 @@ export function TaskDetailsDialog({
                 <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
                   task.status === 'Done' ? 'bg-green-500/10 text-green-500' :
                   task.status === 'In Progress' ? 'bg-blue-500/10 text-blue-500' :
+                  task.status === 'Break' ? 'bg-orange-500/10 text-orange-500' :
                   task.status === 'Blocked' ? 'bg-destructive/10 text-destructive' : 'bg-muted text-muted-foreground'
                 }`}>
                   {task.status}
                 </span>
               </div>
-              <DialogTitle className="text-2xl font-bold">{task.title}</DialogTitle>
+              <div className="mt-2">
+                <Input 
+                  defaultValue={task.title}
+                  onBlur={(e) => handleUpdate('title', e.target.value)}
+                  className="text-2xl font-bold bg-transparent border-none p-0 focus-visible:ring-0 focus-visible:bg-muted/10 transition-colors"
+                />
+              </div>
             </DialogHeader>
 
             <div className="grid gap-6 py-4">

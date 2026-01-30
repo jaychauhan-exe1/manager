@@ -3,8 +3,10 @@
 import { useEffect, useState, useCallback } from "react";
 import { authClient } from "@/src/lib/auth-client";
 import { useParams, useRouter } from "next/navigation";
-import { getProjectById, getTasks, updateTaskStatus, getProjectMembers, updateTaskPosition, initDatabase, deleteTask, startTaskTimer, stopTaskTimer } from "@/app/actions/projects";
+import { getProjectById, getTasks, updateTaskStatus, getProjectMembers, updateTaskPosition, initDatabase, deleteTask, startTaskTimer, stopTaskTimer, updateTask, assignTask } from "@/app/actions/projects";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   ArrowLeft,
@@ -20,7 +22,8 @@ import {
   Users,
   ChevronDown,
   ChevronRight,
-  GripVertical
+  GripVertical,
+  Pencil
 } from "lucide-react";
 import Link from "next/link";
 import { CreateTaskDialog } from "@/components/create-task-dialog";
@@ -44,6 +47,13 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { 
+  Select, 
+  SelectContent, 
+  SelectItem, 
+  SelectTrigger, 
+  SelectValue 
+} from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 
 const STATUS_COLUMNS = ["To Do", "In Progress", "Done", "Blocked"];
@@ -62,6 +72,11 @@ export default function ProjectPage() {
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
   const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+
+  useEffect(() => {
+    setIsEditingTitle(false);
+  }, [selectedTaskId]);
 
   const fetchData = useCallback(async () => {
     if (session?.user?.id && id) {
@@ -89,34 +104,88 @@ export default function ProjectPage() {
   }, [session, authPending, router]);
 
   useEffect(() => {
-    const setup = async () => {
-      await initDatabase();
-      if (session) {
-        fetchData();
-      }
-    };
-    setup();
+    if (session && id) {
+      fetchData();
+    }
   }, [session, id, fetchData]);
 
   const handleStatusChange = async (taskId: string, newStatus: string) => {
-    // Optimistic update
     const previousTasks = [...tasks];
-    setTasks(current => current.map(t => 
-      t.id === taskId ? { ...t, status: newStatus } : t
-    ));
+    let parentId: string | null = null;
+    let timeDelta = 0;
+
+    // 1. Optimistically update the task itself and calculate time delta
+    const updatedTasks = tasks.map(t => {
+      if (t.id === taskId) {
+        parentId = t.parent_id;
+        let timer_status = t.timer_status;
+        let timer_started_at = t.timer_started_at;
+        let total_time_spent = Number(t.total_time_spent || 0);
+
+        if (t.timer_status === 'working' && t.timer_started_at) {
+          timeDelta = Math.floor((new Date().getTime() - new Date(t.timer_started_at).getTime()) / 1000);
+          total_time_spent += Math.max(0, timeDelta);
+        }
+
+        if (newStatus === 'In Progress') {
+          timer_status = 'working';
+          timer_started_at = new Date().toISOString();
+        } else {
+          timer_status = 'idle';
+          timer_started_at = null;
+        }
+
+        return { ...t, status: newStatus, timer_status, timer_started_at, total_time_spent };
+      }
+      return t;
+    });
+
+    // 2. Optimistically update the parent task's total time and status
+    const finalTasks = updatedTasks.map(t => {
+      if (parentId && t.id === parentId) {
+        const subtasks = updatedTasks.filter(st => st.parent_id === parentId);
+        const allDone = subtasks.every(st => st.status === 'Done');
+        const anyInProgress = subtasks.some(st => ['In Progress', 'Blocked'].includes(st.status));
+        const someDone = subtasks.some(st => st.status === 'Done');
+
+        let pStatus = 'To Do';
+        if (allDone) pStatus = 'Done';
+        else if (anyInProgress || someDone) pStatus = 'In Progress';
+
+        return { 
+          ...t, 
+          status: pStatus, 
+          total_time_spent: Number(t.total_time_spent || 0) + Math.max(0, timeDelta)
+        };
+      }
+      return t;
+    });
+
+    setTasks(finalTasks);
 
     const result = await updateTaskStatus(taskId, newStatus);
     if (!result.success) {
       toast.error("Failed to update status");
       setTasks(previousTasks);
+    }
+  };
+
+  const handleTaskUpdate = async (taskId: string, data: any) => {
+    // Optimistic update
+    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, ...data } : t));
+    const result = await updateTask(taskId, data);
+    if (!result.success) {
+      toast.error("Failed to update task");
+      fetchData(); // Rollback
+    }
+  };
+
+  const handleAssignTask = async (taskId: string, userId: string | null) => {
+    const result = await assignTask(taskId, userId === 'none' ? null : userId);
+    if (result.success) {
+      fetchData();
     } else {
-      // Background refresh to ensure everything (like parent sync) is correct
-      const [t, m] = await Promise.all([
-        getTasks(id as string),
-        getProjectMembers(id as string)
-      ]);
-      setTasks(t);
-      setMembers(m);
+      toast.error("Failed to assign task");
     }
   };
 
@@ -234,6 +303,18 @@ export default function ProjectPage() {
   };
 
   const handleTimerAction = async (taskId: string, action: 'start' | 'stop' | 'break') => {
+    // Local optimistic update for timer
+    setTasks(current => current.map(t => {
+      if (t.id === taskId) {
+        return {
+          ...t,
+          timer_status: action === 'start' ? 'working' : action === 'break' ? 'break' : 'idle',
+          timer_started_at: action === 'stop' ? null : new Date().toISOString()
+        };
+      }
+      return t;
+    }));
+
     if (action === 'stop' || action === 'break') {
       await stopTaskTimer(taskId);
       if (action === 'break') {
@@ -242,7 +323,6 @@ export default function ProjectPage() {
     } else {
       await startTaskTimer(taskId, 'working');
     }
-    fetchData();
   };
 
   if (loading || authPending) {
@@ -356,6 +436,7 @@ export default function ProjectPage() {
                        <div className={`w-2 h-2 rounded-full ${
                         column === 'Done' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.4)]' : 
                         column === 'In Progress' ? 'bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.4)]' : 
+                        column === 'Break' ? 'bg-orange-500 shadow-[0_0_8px_rgba(249,115,22,0.4)]' :
                         column === 'Blocked' ? 'bg-destructive shadow-[0_0_8px_rgba(239,68,68,0.4)]' : 'bg-muted-foreground/30'
                       }`} />
                       {column}
@@ -499,32 +580,127 @@ export default function ProjectPage() {
             <>
               <div className="p-8 pb-4">
                 <SheetHeader className="space-y-6">
-                   <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-lg bg-purple-500/10 text-purple-500">
-                      <LayoutDashboard className="w-5 h-5" />
+                  <SheetTitle className="sr-only">Edit Task: {selectedTask.title}</SheetTitle>
+                  
+                  <div className="space-y-4">
+                    <div className="grid gap-2">
+                       <Label className="text-[10px] font-black uppercase tracking-[0.2em] text-purple-400/80">
+                        Task Title
+                      </Label>
+                      <div className="flex items-center gap-3 group">
+                        <div className="p-2 rounded-lg bg-purple-500/10 text-purple-500 shrink-0">
+                          <LayoutDashboard className="w-5 h-5" />
+                        </div>
+                        {isEditingTitle ? (
+                          <Input 
+                            autoFocus
+                            defaultValue={selectedTask.title}
+                            onBlur={(e) => {
+                              handleTaskUpdate(selectedTask.id, { title: e.target.value });
+                              setIsEditingTitle(false);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                handleTaskUpdate(selectedTask.id, { title: e.currentTarget.value });
+                                setIsEditingTitle(false);
+                              }
+                            }}
+                            className="text-2xl font-black tracking-tight bg-muted/20 border-border/50 px-3 h-10 focus-visible:ring-1 rounded-xl"
+                          />
+                        ) : (
+                          <div className="flex items-center gap-3">
+                            <h2 className="text-2xl font-black tracking-tight">{selectedTask.title}</h2>
+                            <Button 
+                              variant="ghost" 
+                              size="icon" 
+                              className="h-8 w-8 rounded-full bg-muted/30 opacity-0 group-hover:opacity-100 transition-all hover:bg-primary/20 hover:text-primary"
+                              onClick={() => setIsEditingTitle(true)}
+                            >
+                              <Pencil className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        )}
+                      </div>
                     </div>
-                    <div className="flex flex-col">
-                      <span className="text-[10px] font-black uppercase tracking-[0.2em] text-purple-400/80">
-                        Big Task
-                      </span>
-                      <SheetTitle className="text-3xl font-black tracking-tight">{selectedTask.title}</SheetTitle>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="grid gap-2">
+                        <Label className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground/50">
+                          Status
+                        </Label>
+                        <Select defaultValue={selectedTask.status} onValueChange={(v) => handleStatusChange(selectedTask.id, v)}>
+                          <SelectTrigger className="h-10 bg-muted/20 border-border/30 rounded-xl px-4">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {STATUS_COLUMNS.map(s => (
+                              <SelectItem key={s} value={s}>{s}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="grid gap-2">
+                        <Label className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground/50">
+                          Priority
+                        </Label>
+                        <Select defaultValue={selectedTask.priority} onValueChange={(v) => handleTaskUpdate(selectedTask.id, { priority: v })}>
+                          <SelectTrigger className="h-10 bg-muted/20 border-border/30 rounded-xl px-4">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="Low">Low</SelectItem>
+                            <SelectItem value="Medium">Medium</SelectItem>
+                            <SelectItem value="High">High</SelectItem>
+                            <SelectItem value="Urgent">Urgent</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-2">
+                      <Label className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground/50">
+                        Assignee
+                      </Label>
+                      <Select defaultValue={selectedTask.assignee_id || 'none'} onValueChange={(v) => handleAssignTask(selectedTask.id, v)}>
+                        <SelectTrigger className="h-12 bg-muted/20 border-border/30 rounded-xl px-4">
+                          <div className="flex items-center gap-3">
+                            <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center text-[10px] font-bold text-primary shrink-0">
+                              {selectedTask.assignee_name?.[0] || '?'}
+                            </div>
+                            <div className="text-sm font-bold truncate">
+                              <SelectValue placeholder="Unassigned" />
+                            </div>
+                          </div>
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">Unassigned</SelectItem>
+                          {members.map(m => (
+                            <SelectItem key={m.user_id} value={m.user_id}>
+                              <div className="flex items-center gap-2">
+                                <div className="w-4 h-4 rounded-full bg-primary/20 flex items-center justify-center text-[8px] font-bold">
+                                  {m.name?.[0]}
+                                </div>
+                                {m.name}
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="grid gap-2 pt-2 border-t border-border/10 mt-4">
+                      <Label className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground/50">
+                        Description
+                      </Label>
+                      <Textarea 
+                        defaultValue={selectedTask.description}
+                        onBlur={(e) => handleTaskUpdate(selectedTask.id, { description: e.target.value })}
+                        placeholder="Describe what needs to be achieved in this phase..."
+                        className="text-muted-foreground text-sm leading-relaxed bg-muted/10 border-none p-3 rounded-xl resize-none focus-visible:ring-1 focus-visible:ring-primary/20 min-h-[80px]"
+                      />
                     </div>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <span className={`px-3 py-1 rounded text-[10px] font-bold uppercase tracking-wider ${
-                      selectedTask.status === 'Done' ? 'bg-green-500/10 text-green-500 border border-green-500/20' :
-                      selectedTask.status === 'In Progress' ? 'bg-primary/10 text-primary border border-primary/20' : 
-                      selectedTask.status === 'Blocked' ? 'bg-destructive/10 text-destructive border border-destructive/20' : 'bg-muted text-muted-foreground border border-border'
-                    }`}>
-                      {selectedTask.status}
-                    </span>
-                    <span className={`px-3 py-1 rounded text-[10px] font-bold uppercase tracking-wider bg-muted/50 border border-border/50`}>
-                      {selectedTask.priority} Priority
-                    </span>
-                  </div>
-                  <SheetDescription className="text-muted-foreground text-base leading-relaxed">
-                    {selectedTask.description || "Project phase description goes here. Use subtasks to break down the work."}
-                  </SheetDescription>
                 </SheetHeader>
               </div>
 
@@ -560,13 +736,12 @@ export default function ProjectPage() {
                           >
                             {st.status === 'Done' && <CheckCircle2 className="w-3.5 h-3.5" />}
                           </button>
-                          <div className="flex flex-col cursor-pointer" onClick={() => {
-                            setSelectedTaskId(st.id);
-                            setIsDetailsOpen(true);
-                          }}>
-                            <div className={`text-sm font-bold transition-all ${st.status === 'Done' ? 'line-through text-muted-foreground/50' : 'text-foreground hover:text-primary'}`}>
-                              {st.title}
-                            </div>
+                          <div className="flex flex-col flex-1">
+                            <Input 
+                              defaultValue={st.title}
+                              onBlur={(e) => handleTaskUpdate(st.id, { title: e.target.value })}
+                              className={`text-sm font-bold bg-transparent border-none p-0 h-auto focus-visible:ring-0 focus-visible:bg-white/5 transition-all ${st.status === 'Done' ? 'line-through text-muted-foreground/50' : 'text-foreground'}`}
+                            />
                             <div className="flex items-center gap-3 mt-1">
                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded bg-muted/50 text-muted-foreground uppercase`}>
                                  {st.status}
@@ -598,7 +773,7 @@ export default function ProjectPage() {
                                 className="gap-2"
                               >
                                 <div className={`w-2 h-2 rounded-full ${
-                                  s === 'Done' ? 'bg-green-500' : s === 'In Progress' ? 'bg-blue-500' : s === 'Blocked' ? 'bg-destructive' : 'bg-muted-foreground/30'
+                                  s === 'Done' ? 'bg-green-500' : s === 'In Progress' ? 'bg-blue-500' : s === 'Break' ? 'bg-orange-500' : s === 'Blocked' ? 'bg-destructive' : 'bg-muted-foreground/30'
                                 }`} />
                                 {s}
                               </DropdownMenuItem>
@@ -624,26 +799,23 @@ export default function ProjectPage() {
                 </div>
 
                 <div className="pt-8 border-t border-border/50">
-                   <h4 className="text-xs font-black uppercase tracking-[0.2em] text-muted-foreground/50 mb-6">Execution Details</h4>
-                   <div className="grid grid-cols-2 gap-6">
-                     <div className="p-4 rounded-2xl bg-muted/20 border border-border/30">
-                       <Label className="text-[10px] text-muted-foreground font-black uppercase tracking-widest flex items-center gap-2 mb-2">
-                         <Calendar className="w-3.5 h-3.5 text-primary" /> Start Date
-                       </Label>
-                       <div className="text-sm font-bold">{new Date(selectedTask.created_at).toLocaleDateString()}</div>
-                     </div>
-                     <div className="p-4 rounded-2xl bg-muted/20 border border-border/30">
-                       <Label className="text-[10px] text-muted-foreground font-black uppercase tracking-widest flex items-center gap-2 mb-2">
-                         <Users className="w-3.5 h-3.5 text-primary" /> Assigned To
-                       </Label>
-                       <div className="flex items-center gap-2">
-                         <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center text-[10px] font-bold text-primary">
-                           {selectedTask.assignee_name?.[0] || '?'}
-                         </div>
-                         <div className="text-sm font-bold">{selectedTask.assignee_name || "Open Pool"}</div>
-                       </div>
-                     </div>
-                   </div>
+                    <h4 className="text-xs font-black uppercase tracking-[0.2em] text-muted-foreground/50 mb-6 px-1">Metrics & Timeline</h4>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="p-4 rounded-2xl bg-muted/20 border border-border/30">
+                        <Label className="text-[10px] text-muted-foreground font-black uppercase tracking-widest flex items-center gap-2 mb-2">
+                          <Calendar className="w-3.5 h-3.5 text-primary shrink-0" /> Started
+                        </Label>
+                        <div className="text-sm font-bold">{new Date(selectedTask.created_at).toLocaleDateString()}</div>
+                      </div>
+                      <div className="p-4 rounded-2xl bg-muted/20 border border-border/30">
+                        <Label className="text-[10px] text-muted-foreground font-black uppercase tracking-widest flex items-center gap-2 mb-2">
+                          <Clock className="w-3.5 h-3.5 text-primary shrink-0" /> Effort
+                        </Label>
+                        <div className="text-sm font-bold">
+                           {Math.floor(selectedTask.total_time_spent / 3600)}h {Math.floor((selectedTask.total_time_spent % 3600) / 60)}m
+                        </div>
+                      </div>
+                    </div>
                 </div>
               </div>
 
@@ -738,7 +910,7 @@ function TaskItem({ task, subtasks, onDragStart, onDragEnd, onDrop, onStatusChan
                   className="gap-2"
                 >
                    <div className={`w-2 h-2 rounded-full ${
-                    s === 'Done' ? 'bg-green-500' : s === 'In Progress' ? 'bg-blue-500' : s === 'Blocked' ? 'bg-destructive' : 'bg-muted-foreground/30'
+                    s === 'Done' ? 'bg-green-500' : s === 'In Progress' ? 'bg-blue-500' : s === 'Break' ? 'bg-orange-500' : s === 'Blocked' ? 'bg-destructive' : 'bg-muted-foreground/30'
                   }`} />
                   Move to {s}
                 </DropdownMenuItem>
@@ -755,7 +927,17 @@ function TaskItem({ task, subtasks, onDragStart, onDragEnd, onDrop, onStatusChan
               <span className="text-muted-foreground/60">Execution Progress</span>
               <span className="text-primary">{Math.round(progress)}%</span>
             </div>
-            <Progress value={progress} className="h-1.5 bg-muted/30" />
+            <Progress value={progress} className={`h-1.5 ${task.status === 'Done' ? 'bg-green-500/20' : 'bg-muted/30'}`} indicatorClassName={task.status === 'Done' ? 'bg-green-500' : ''} />
+          </div>
+
+          <div className="flex items-center justify-between py-2 px-3 rounded-xl bg-primary/5 border border-primary/10">
+            <div className="flex items-center gap-2">
+              <Clock className="w-3.5 h-3.5 text-primary" />
+              <span className="text-[10px] font-black tabular-nums">
+                {Math.floor(task.total_time_spent / 3600)}h {Math.floor((task.total_time_spent % 3600) / 60)}m
+              </span>
+            </div>
+            <span className="text-[9px] font-bold text-muted-foreground uppercase opacity-50">Total Work</span>
           </div>
 
           {subtasks.length > 0 && (
@@ -801,18 +983,26 @@ function TimerDisplay({ task, onAction }: { task: any, onAction: (action: 'start
   const [seconds, setSeconds] = useState(0);
   
   useEffect(() => {
-    let interval: any;
-    if (task.timer_status === 'working' || task.timer_status === 'break') {
-      const start = new Date(task.timer_started_at).getTime();
-      interval = setInterval(() => {
-        const now = new Date().getTime();
-        setSeconds(Math.floor((now - start) / 1000) + (task.total_time_spent || 0));
-      }, 1000);
-    } else {
-      setSeconds(task.total_time_spent || 0);
+    if (task.timer_status === 'idle' || !task.timer_started_at) {
+      setSeconds(Number(task.total_time_spent || 0));
+      return;
     }
+
+    const start = new Date(task.timer_started_at).getTime();
+    const baseSeconds = Number(task.total_time_spent || 0);
+
+    const update = () => {
+      const now = new Date().getTime();
+      const diff = Math.floor((now - start) / 1000);
+      // Ensure we don't show negative time if clocks are slightly out of sync
+      setSeconds(baseSeconds + Math.max(0, diff));
+    };
+
+    update(); // Run immediately
+    const interval = setInterval(update, 1000);
+    
     return () => clearInterval(interval);
-  }, [task]);
+  }, [task.id, task.timer_status, task.timer_started_at, task.total_time_spent]);
 
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);

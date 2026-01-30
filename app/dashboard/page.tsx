@@ -37,14 +37,10 @@ export default function DashboardPage() {
   }, [session, isPending, router]);
 
   useEffect(() => {
-    const setup = async () => {
-      await initDatabase();
-      if (session?.user?.id) {
-        await fetchProjects();
-      }
-    };
     if (session) {
-      setup();
+      // Run init in background if needed, but don't block
+      initDatabase();
+      fetchProjects();
     }
   }, [session]);
 
