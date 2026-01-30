@@ -30,13 +30,15 @@ export function CreateTaskDialog({
   userId, 
   onTaskCreated,
   bigTasks = [],
-  fixedType
+  fixedType,
+  onOptimisticCreate
 }: { 
   projectId: string; 
   userId: string; 
   onTaskCreated: () => void;
   bigTasks?: any[];
   fixedType?: 'big' | 'small';
+  onOptimisticCreate?: (task: any) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -44,18 +46,46 @@ export function CreateTaskDialog({
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState("Medium");
   const [type, setType] = useState<"big" | "small">(fixedType || "small");
-  const [parentId, setParentId] = useState<string>("none");
+  
+  // Default parent to the first big task if only one is provided (sidebar case)
+  const defaultParentId = (fixedType === 'small' && bigTasks.length === 1) ? bigTasks[0].id : "none";
+  const [parentId, setParentId] = useState<string>(defaultParentId);
 
-  // Keep type in sync with fixedType if it changes
   useEffect(() => {
     if (fixedType) setType(fixedType);
-  }, [fixedType]);
+    if (fixedType === 'small' && bigTasks.length === 1) {
+      setParentId(bigTasks[0].id);
+    }
+  }, [fixedType, bigTasks]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title) return;
 
+    const newTask = {
+      id: crypto.randomUUID(),
+      project_id: projectId,
+      title,
+      description,
+      priority,
+      status: "To Do",
+      type,
+      parent_id: type === 'small' && parentId !== 'none' ? parentId : null,
+      creator_id: userId,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      subtask_count: 0,
+      subtasks_done: 0,
+      assignee_name: null
+    };
+
+    if (onOptimisticCreate) {
+      onOptimisticCreate(newTask);
+    }
+
     setLoading(true);
+    setOpen(false); // Close early for smoothness
+    
     const result = await createTask({ 
       project_id: projectId, 
       title, 
@@ -65,19 +95,19 @@ export function CreateTaskDialog({
       type: type,
       parent_id: type === 'small' && parentId !== 'none' ? parentId : undefined
     });
+    
     setLoading(false);
 
     if (result.success) {
       toast.success(`${type === 'big' ? 'Big' : 'Small'} task created!`);
-      setOpen(false);
       setTitle("");
       setDescription("");
       setPriority("Medium");
-      if (!fixedType) setType("small");
-      setParentId("none");
       onTaskCreated();
     } else {
       toast.error("Failed to create task");
+      // Actually we'd need a roll-back here, but fetchData will fix it anyway.
+      onTaskCreated(); 
     }
   };
 

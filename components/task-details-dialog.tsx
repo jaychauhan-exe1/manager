@@ -109,7 +109,12 @@ export function TaskDetailsDialog({
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
         {loading ? (
-          <div className="py-20 text-center">Loading task details...</div>
+          <div className="py-20 text-center">
+            <DialogHeader>
+               <DialogTitle className="sr-only">Loading Task Details</DialogTitle>
+            </DialogHeader>
+            Loading task details...
+          </div>
         ) : task ? (
           <>
             <DialogHeader>

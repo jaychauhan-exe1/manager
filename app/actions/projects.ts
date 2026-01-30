@@ -47,10 +47,34 @@ export async function initDatabase() {
         due_date TIMESTAMPTZ,
         assignee_id TEXT REFERENCES "user"("id"),
         creator_id TEXT NOT NULL REFERENCES "user"("id"),
+        position DOUBLE PRECISION DEFAULT 0,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
       )
     `);
+
+    // Aggressive migrations for existing tables
+    const migrations = [
+      "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS parent_id UUID REFERENCES tasks(id) ON DELETE CASCADE",
+      "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'small'",
+      "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS position DOUBLE PRECISION DEFAULT 0"
+    ];
+
+    for (const m of migrations) {
+      try {
+        await db.query(m);
+      } catch (e) {
+        // IF NOT EXISTS is supported in PG 9.6+, but just in case
+        console.log(`Migration notice: ${m} - possibly already applied`);
+      }
+    }
+
+    // Ensure CHECK constraint for type
+    try {
+      await db.query(`ALTER TABLE tasks ADD CONSTRAINT tasks_type_check CHECK (type IN ('big', 'small'))`);
+    } catch (e) {
+      // Constraint probably exists
+    }
 
     // Task Dependencies (Blocked by / Blocking)
     await db.query(`
@@ -76,22 +100,9 @@ export async function initDatabase() {
       )
     `);
 
-    // Add columns if they don't exist (for existing tables)
-    await db.query(`
-      DO $$ 
-      BEGIN 
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='tasks' AND column_name='parent_id') THEN
-          ALTER TABLE tasks ADD COLUMN parent_id UUID REFERENCES tasks(id) ON DELETE CASCADE;
-        END IF;
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='tasks' AND column_name='type') THEN
-          ALTER TABLE tasks ADD COLUMN type TEXT NOT NULL DEFAULT 'small' CHECK (type IN ('big', 'small'));
-        END IF;
-      END $$;
-    `);
-
     return { success: true };
   } catch (error) {
-    console.error("Failed to init db:", error);
+    console.error("Database initialization error:", error);
     return { success: false, error };
   }
 }
@@ -145,7 +156,7 @@ export async function getTasks(projectId: string) {
     FROM tasks t
     LEFT JOIN "user" u ON t.assignee_id = u.id
     WHERE t.project_id = $1
-    ORDER BY t.created_at DESC
+    ORDER BY t.position DESC, t.created_at DESC
   `, [projectId]);
   return result.rows;
 }
@@ -190,19 +201,34 @@ export async function createTask(data: {
   parent_id?: string;
 }) {
   try {
+    const priority = data.priority || 'Medium';
+    const weights: Record<string, number> = { 'Urgent': 4000, 'High': 3000, 'Medium': 2000, 'Low': 1000 };
+    const baseWeight = weights[priority] || 2000;
+    
+    // Get max position in this priority tier to put it at the top
+    const posResult = await db.query(`
+      SELECT MAX(position) as max_pos FROM tasks 
+      WHERE project_id = $1 AND priority = $2
+    `, [data.project_id, priority]);
+    
+    const initialPosition = posResult.rows[0].max_pos 
+      ? parseFloat(posResult.rows[0].max_pos) + 1 
+      : baseWeight;
+
     const result = await db.query(`
-      INSERT INTO tasks (project_id, title, description, status, priority, creator_id, type, parent_id)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      INSERT INTO tasks (project_id, title, description, status, priority, creator_id, type, parent_id, position)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       RETURNING *
     `, [
       data.project_id, 
       data.title, 
       data.description || '', 
       data.status || 'To Do', 
-      data.priority || 'Medium', 
+      priority, 
       data.creator_id,
       data.type || 'small',
-      data.parent_id || null
+      data.parent_id || null,
+      initialPosition
     ]);
 
     if (data.parent_id) {
@@ -355,6 +381,29 @@ export async function assignTask(taskId: string, userId: string | null) {
     await db.query(`
       UPDATE tasks SET assignee_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2
     `, [userId, taskId]);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error };
+  }
+}
+
+export async function updateTaskPosition(taskId: string, newPosition: number, newStatus?: string) {
+  try {
+    if (newStatus) {
+      await db.query(`
+        UPDATE tasks SET position = $1, status = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3
+      `, [newPosition, newStatus, taskId]);
+      
+      const taskResult = await db.query('SELECT parent_id FROM tasks WHERE id = $1', [taskId]);
+      const parentId = taskResult.rows[0]?.parent_id;
+      if (parentId) {
+        await syncParentTaskStatus(parentId);
+      }
+    } else {
+      await db.query(`
+        UPDATE tasks SET position = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2
+      `, [newPosition, taskId]);
+    }
     return { success: true };
   } catch (error) {
     return { success: false, error };
