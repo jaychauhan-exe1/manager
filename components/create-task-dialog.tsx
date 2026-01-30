@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -28,17 +28,28 @@ import { toast } from "sonner";
 export function CreateTaskDialog({ 
   projectId, 
   userId, 
-  onTaskCreated 
+  onTaskCreated,
+  bigTasks = [],
+  fixedType
 }: { 
   projectId: string; 
   userId: string; 
-  onTaskCreated: () => void 
+  onTaskCreated: () => void;
+  bigTasks?: any[];
+  fixedType?: 'big' | 'small';
 }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState("Medium");
+  const [type, setType] = useState<"big" | "small">(fixedType || "small");
+  const [parentId, setParentId] = useState<string>("none");
+
+  // Keep type in sync with fixedType if it changes
+  useEffect(() => {
+    if (fixedType) setType(fixedType);
+  }, [fixedType]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -50,16 +61,20 @@ export function CreateTaskDialog({
       title, 
       description, 
       priority,
-      creator_id: userId 
+      creator_id: userId,
+      type: type,
+      parent_id: type === 'small' && parentId !== 'none' ? parentId : undefined
     });
     setLoading(false);
 
     if (result.success) {
-      toast.success("Task created!");
+      toast.success(`${type === 'big' ? 'Big' : 'Small'} task created!`);
       setOpen(false);
       setTitle("");
       setDescription("");
       setPriority("Medium");
+      if (!fixedType) setType("small");
+      setParentId("none");
       onTaskCreated();
     } else {
       toast.error("Failed to create task");
@@ -69,27 +84,60 @@ export function CreateTaskDialog({
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button size="sm" className="gap-2">
+        <Button size={fixedType === 'small' ? 'xs' : 'sm'} className="gap-2">
           <Plus className="w-4 h-4" />
-          Add Task
+          {fixedType === 'small' ? 'Add Subtask' : 'Add Big Task'}
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-[425px]">
         <form onSubmit={handleSubmit}>
           <DialogHeader>
-            <DialogTitle>New Task</DialogTitle>
+            <DialogTitle>New {type === 'big' ? 'Big' : 'Small'} Task</DialogTitle>
             <DialogDescription>
-              Add a new task to this project.
+              {type === 'big' ? 'Create a major project milestone or category.' : 'Add a specific actionable subtask.'}
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
+            {!fixedType && (
+              <div className="grid grid-cols-2 gap-4">
+                <div className="grid gap-2">
+                  <Label>Task Type</Label>
+                  <Select value={type} onValueChange={(v: any) => setType(v)}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="big">Big Task</SelectItem>
+                      <SelectItem value="small">Small Task</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {type === 'small' && (
+                  <div className="grid gap-2">
+                    <Label>Parent Big Task</Label>
+                    <Select value={parentId} onValueChange={setParentId}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">None (Independent)</SelectItem>
+                        {bigTasks.map(bt => (
+                          <SelectItem key={bt.id} value={bt.id}>{bt.title}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+              </div>
+            )}
+            
             <div className="grid gap-2">
               <Label htmlFor="title">Task Title</Label>
               <Input
                 id="title"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="e.g. Design Navbar"
+                placeholder={type === 'big' ? "e.g. Frontend Development" : "e.g. Design Navbar"}
                 required
               />
             </div>
