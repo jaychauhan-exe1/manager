@@ -512,6 +512,13 @@ export async function updateTaskPosition(taskId: string, newPosition: number, ne
       // Update position separately since automation handles status/timer
       await db.query(`UPDATE tasks SET position = $1 WHERE id = $2`, [newPosition, taskId]);
 
+      // Top-down sync: Update all subtasks to the new status
+      const subtasks = await db.query('SELECT id FROM tasks WHERE parent_id = $1', [taskId]);
+      for (const st of subtasks.rows) {
+        await db.query('UPDATE tasks SET status = $1 WHERE id = $2', [newStatus, st.id]);
+        await handleTimerAutomation(st.id, newStatus);
+      }
+
       const taskResult = await db.query('SELECT parent_id FROM tasks WHERE id = $1', [taskId]);
       const parentId = taskResult.rows[0]?.parent_id;
       if (parentId) {

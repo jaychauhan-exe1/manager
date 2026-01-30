@@ -56,7 +56,7 @@ import {
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 
-const STATUS_COLUMNS = ["To Do", "In Progress", "Done", "Blocked"];
+const STATUS_COLUMNS = ["To Do", "In Progress", "Blocked", "Done"];
 
 export default function ProjectPage() {
   const { id } = useParams();
@@ -75,12 +75,23 @@ export default function ProjectPage() {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editingSubtaskId, setEditingSubtaskId] = useState<string | null>(null);
   const [expandedSubtaskId, setExpandedSubtaskId] = useState<string | null>(null);
+  const [isMoving, setIsMoving] = useState(false);
+  const [dragOverTaskId, setDragOverTaskId] = useState<string | null>(null);
 
   useEffect(() => {
     setIsEditingTitle(false);
     setEditingSubtaskId(null);
     setExpandedSubtaskId(null);
   }, [selectedTaskId]);
+
+  useEffect(() => {
+    const handleGlobalDragEnd = () => {
+      setDraggingTaskId(null);
+      setDragOverTaskId(null);
+    };
+    window.addEventListener('dragend', handleGlobalDragEnd);
+    return () => window.removeEventListener('dragend', handleGlobalDragEnd);
+  }, []);
 
   const fetchData = useCallback(async () => {
     if (session?.user?.id && id) {
@@ -213,48 +224,56 @@ export default function ProjectPage() {
     setDraggingTaskId(null);
   };
 
-  const onDropOnColumn = async (e: React.DragEvent, status: string) => {
+   const onDropOnColumn = async (e: React.DragEvent, status: string) => {
     e.preventDefault();
     setDragOverColumn(null);
+    setDragOverTaskId(null);
+    if (isMoving) return;
+
     const taskId = e.dataTransfer.getData("taskId");
-    
     if (taskId) {
+      const taskToMove = tasks.find(x => x.id === taskId);
+      if (!taskToMove || taskToMove.status === status) return;
+
+      setIsMoving(true);
       const columnTasks = tasks
         .filter(t => t.status === status && t.type === 'big')
         .sort((a, b) => Number(b.position) - Number(a.position)); // DESC
       
-      // If there are tasks, put it at the bottom.
       let newPosition;
       if (columnTasks.length > 0) {
         newPosition = Number(columnTasks[columnTasks.length - 1].position) - 10;
       } else {
-        const t = tasks.find(x => x.id === taskId);
         const weights: Record<string, number> = { 'Urgent': 4000, 'High': 3000, 'Medium': 2000, 'Low': 1000 };
-        newPosition = weights[t?.priority || 'Medium'] || 2000;
+        newPosition = weights[taskToMove.priority || 'Medium'] || 2000;
       }
 
       setDraggingTaskId(null);
       
-      // Optimistic update
-      setTasks(current => current.map(t => 
-        t.id === taskId ? { ...t, position: newPosition, status: status } : t
-      ));
+      // Optimistic update for task and its subtasks
+      setTasks(current => current.map(t => {
+        if (t.id === taskId) return { ...t, position: newPosition, status: status };
+        if (t.parent_id === taskId) return { ...t, status: status }; // Sync subtasks
+        return t;
+      }));
       
       try {
         const result = await updateTaskPosition(taskId, newPosition, status);
         if (!result.success) throw new Error("Update failure");
-        fetchData(); // Sync with server
       } catch (err) {
         toast.error("Failed to move task");
         fetchData(); // Rollback
+      } finally {
+        setIsMoving(false);
       }
     }
   };
 
-  const onDropOnTask = async (e: React.DragEvent, targetTaskId: string, targetStatus: string) => {
+   const onDropOnTask = async (e: React.DragEvent, targetTaskId: string, targetStatus: string) => {
     e.preventDefault();
     e.stopPropagation();
     setDragOverColumn(null);
+    if (isMoving) return;
     
     const sourceTaskId = e.dataTransfer.getData("taskId");
     if (!sourceTaskId || sourceTaskId === targetTaskId) return;
@@ -263,6 +282,7 @@ export default function ProjectPage() {
     const targetTask = tasks.find(t => t.id === targetTaskId);
     if (!sourceTask || !targetTask) return;
 
+    setIsMoving(true);
     const columnTasks = tasks
       .filter(t => t.status === targetStatus && t.type === 'big')
       .sort((a, b) => Number(b.position) - Number(a.position)); // DESC
@@ -279,18 +299,21 @@ export default function ProjectPage() {
 
     setDraggingTaskId(null);
     
-    // Optimistic update
-    setTasks(current => current.map(t => 
-      t.id === sourceTaskId ? { ...t, position: newPosition, status: targetStatus } : t
-    ));
+    // Optimistic update for task and its subtasks
+    setTasks(current => current.map(t => {
+      if (t.id === sourceTaskId) return { ...t, position: newPosition, status: targetStatus };
+      if (t.parent_id === sourceTaskId) return { ...t, status: targetStatus }; // Sync subtasks
+      return t;
+    }));
 
     try {
       const result = await updateTaskPosition(sourceTaskId, newPosition, targetStatus);
       if (!result.success) throw new Error("Update failure");
-      fetchData(); // Sync
     } catch (err) {
       toast.error("Failed to reorder task");
       fetchData(); // Rollback
+    } finally {
+      setIsMoving(false);
     }
   };
 
@@ -454,27 +477,73 @@ export default function ProjectPage() {
                     </h3>
                   </div>
                   
-                  <div className="flex flex-col gap-4 min-h-[600px]">
-                    {bigTasks.filter(t => t.status === column).map((task) => (
-                      <TaskItem 
+                   <div className="flex flex-col gap-4 min-h-[600px] relative">
+                    {bigTasks
+                      .filter(t => t.status === column)
+                      .sort((a, b) => Number(b.position) - Number(a.position))
+                      .map((task) => (
+                      <div 
                         key={task.id} 
-                        task={task} 
-                        subtasks={tasks.filter(st => st.parent_id === task.id)}
-                        onDragStart={onDragStart}
-                        onDragEnd={onDragEnd}
-                        onDrop={(e: any) => onDropOnTask(e, task.id, column)}
-                        onClick={() => {
-                          setSelectedTaskId(task.id);
-                          setIsSidebarOpen(true);
+                        className="relative group/taskwrapper"
+                        onDragLeave={(e) => {
+                          // Only clear if we're actually leaving the wrapper, not entering a child
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          if (e.clientX <= rect.left || e.clientX >= rect.right || e.clientY <= rect.top || e.clientY >= rect.bottom) {
+                            setDragOverTaskId(null);
+                          }
                         }}
-                        onOpenDetails={() => {
-                          setSelectedTaskId(task.id);
-                          setIsDetailsOpen(true);
-                        }}
-                        onDelete={() => handleDeleteTask(task.id)}
-                        onStatusChange={handleStatusChange}
-                        isDragging={draggingTaskId === task.id}
-                      />
+                      >
+                        <div className={`transition-all duration-300 ease-in-out overflow-hidden ${dragOverTaskId === task.id && draggingTaskId !== task.id ? 'h-20 opacity-100 mb-4' : 'h-0 opacity-0 mb-0'}`}>
+                          <div className="mx-2 h-full border-2 border-dashed border-primary/30 rounded-2xl bg-primary/5 flex items-center justify-center">
+                            <div className="w-full h-0.5 bg-primary/20 rounded-full mx-12 opacity-30" />
+                          </div>
+                        </div>
+                        <TaskItem 
+                          task={task} 
+                          subtasks={tasks.filter(st => st.parent_id === task.id)}
+                          onDragStart={onDragStart}
+                          onDragEnd={() => {
+                            setDraggingTaskId(null);
+                            setDragOverTaskId(null);
+                          }}
+                          onDragOver={() => {
+                            if (draggingTaskId !== task.id) setDragOverTaskId(task.id);
+                          }}
+                          onDrop={(e: any) => {
+                            setDragOverTaskId(null);
+                            onDropOnTask(e, task.id, column);
+                          }}
+                          onClick={() => {
+                            setSelectedTaskId(task.id);
+                            setIsSidebarOpen(true);
+                          }}
+                          onOpenDetails={() => {
+                            setSelectedTaskId(task.id);
+                            setIsDetailsOpen(true);
+                          }}
+                          onDelete={() => handleDeleteTask(task.id)}
+                          onStatusChange={handleStatusChange}
+                          isDragging={draggingTaskId === task.id}
+                          onMove={async (dir: 'up' | 'down') => {
+                             const colTasks = bigTasks.filter(t => t.status === column).sort((a, b) => Number(b.position) - Number(a.position));
+                             const idx = colTasks.findIndex(t => t.id === task.id);
+                             let newPos;
+                             if (dir === 'up' && idx > 0) {
+                               const above = colTasks[idx - 1];
+                               const aboveAbove = colTasks[idx - 2];
+                               newPos = aboveAbove ? (Number(above.position) + Number(aboveAbove.position)) / 2 : Number(above.position) + 10;
+                             } else if (dir === 'down' && idx < colTasks.length - 1) {
+                               const below = colTasks[idx + 1];
+                               const belowBelow = colTasks[idx + 2];
+                               newPos = belowBelow ? (Number(below.position) + Number(belowBelow.position)) / 2 : Number(below.position) - 10;
+                             }
+                             if (newPos) {
+                               setTasks(prev => prev.map(t => t.id === task.id ? { ...t, position: newPos } : t));
+                               await updateTaskPosition(task.id, newPos);
+                             }
+                          }}
+                        />
+                      </div>
                     ))}
                   </div>
                 </div>
@@ -934,32 +1003,26 @@ export default function ProjectPage() {
   );
 }
 
-function TaskItem({ task, subtasks, onDragStart, onDragEnd, onDrop, onStatusChange, onDelete, onClick, onOpenDetails, isDragging }: any) {
+ function TaskItem({ task, subtasks, onDragStart, onDragEnd, onDragOver, onDrop, onStatusChange, onDelete, onClick, onOpenDetails, isDragging, onMove }: any) {
   const progress = task.subtask_count > 0 ? (task.subtasks_done / task.subtask_count) * 100 : 0;
 
   return (
     <Card 
       className={`group hover:border-primary/50 transition-all duration-300 cursor-grab active:cursor-grabbing border-border shadow-md overflow-hidden ${
-        isDragging ? 'border-primary border-dashed scale-[1.02] shadow-2xl relative z-50' : 'hover:shadow-2xl hover:shadow-primary/5'
-      } border-l-4 ${task.status === 'Done' ? 'border-l-green-500 bg-green-500/5 opacity-80' : 'border-l-primary bg-card/60'} backdrop-blur-sm relative`}
+        isDragging ? 'opacity-40 scale-[0.98] border-primary border-dashed' : 'hover:shadow-xl hover:shadow-primary/5'
+      } border-l-4 ${task.status === 'Done' ? 'border-l-green-500 bg-green-500/5' : 'border-l-primary bg-card/60'} backdrop-blur-sm relative`}
       draggable
       onDragStart={(e) => onDragStart(e, task.id)}
       onDragEnd={onDragEnd}
       onDragOver={(e) => {
         e.preventDefault();
-        e.currentTarget.classList.add('translate-y-2');
+        onDragOver();
       }}
-      onDragLeave={(e) => {
-        e.currentTarget.classList.remove('translate-y-2');
-      }}
-      onDrop={(e) => {
-        e.currentTarget.classList.remove('translate-y-2');
-        onDrop(e);
-      }}
+      onDrop={onDrop}
       onClick={onClick}
     >
       {isDragging && (
-        <div className="absolute inset-0 bg-primary/5 animate-pulse" />
+        <div className="absolute inset-0 bg-primary/5" />
       )}
       <CardHeader className="p-5 space-y-3">
         <div className="flex justify-between items-start">
