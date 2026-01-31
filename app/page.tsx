@@ -16,7 +16,7 @@ export default function Home() {
         </div>
         
         <h1 className="text-5xl md:text-7xl font-extrabold tracking-tight mb-6 bg-clip-text text-transparent bg-gradient-to-b from-foreground to-foreground/70">
-          Manage Everything <br /> <span className="text-primary italic">Faster.</span>
+          Manage Everything <br /> <span className="text-primary italic">Fasterere.</span>
         </h1>
         
         <p className="max-w-2xl text-lg md:text-xl text-muted-foreground mb-10 leading-relaxed">
