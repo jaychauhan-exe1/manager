@@ -429,7 +429,7 @@ export default function ProjectPage() {
         <Tabs defaultValue="board" className="w-full">
           <div className="flex items-center justify-between mb-6 border-b border-border pb-1">
             <TabsList className="bg-transparent h-auto p-0 gap-8">
-              <TabsTrigger value="board" className="data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:text-primary border-b-2 border-transparent data-[state=active]:border-primary rounded-none px-0 pb-3 flex items-center gap-2 text-sm">
+              <TabsTrigger value="board" className="data-[state=active]:bg-transparent data-[state=active]:rounded-full data-[state=active]:shadow-none data-[state=active]:text-primary border-b-2 border-transparent data-[state=active]:border-primary rounded-none px-0 pb-3 flex items-center gap-2 text-sm">
                 <LayoutDashboard className="w-4 h-4" /> Board
               </TabsTrigger>
               <TabsTrigger value="list" className="data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:text-primary border-b-2 border-transparent data-[state=active]:border-primary rounded-none px-0 pb-3 flex items-center gap-2 text-sm">
